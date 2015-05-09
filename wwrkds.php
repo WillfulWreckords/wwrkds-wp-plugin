@@ -35,9 +35,56 @@
     // Add this code to your theme functions.php file.
     // ///////////////////////////////////////////////////////////////////////////
     function wc_remove_related_products( $args ) {
+        print_r($args);
         return array();
     }
     add_filter('woocommerce_related_products_args','wc_remove_related_products', 10); 
+
+    /*
+    add_filter( 'woocommerce_product_related_posts', 'my_related_products', 20, 1 ) ;
+    function my_related_products( $related_products = array() ) {
+      global $post, $woocommerce;
+
+      $limit = 50;
+
+      $terms = wp_get_post_terms( $post->ID, 'product_tag' );
+
+      if ( !$terms || is_wp_error( $terms ) )
+        return $related_products;
+
+      if ( empty( $terms ) )
+        return array();
+
+      $tags_array = array(); 
+
+      foreach ( $terms as $term )
+        $tags_array[] = $term->term_id;
+
+      $meta_query = array();
+
+      $meta_query[] = $woocommerce->query->visibility_meta_query();
+
+      $meta_query[] = $woocommerce->query->stock_status_meta_query();
+
+      $related_products = get_posts( array(
+        'orderby' 	=> 'rand',
+        'posts_per_page'=> $limit,
+        'post_type' 	=> 'product',
+        'fields' 	=> 'ids',
+        'meta_query' 	=> $meta_query,
+        'tax_query' 	=> array(
+            array(
+                'taxonomy' 	=> 'product_tag',
+                'field' 	=> 'id',
+                'terms' 	=> $tags_array
+            )
+        )
+      ));
+
+      return $related_products;
+
+    }
+    */
 
     // ///////////////////////////////////////////////////////////////////////////
     // Customizations
@@ -66,6 +113,7 @@
         }
         echo $html;
     }
+
     add_action('product_vendors_page_description_after','wwrkds_product_vendors_page_description_after');
     function wwrkds_product_vendors_page_description_after($vendor_id){
         
@@ -94,16 +142,9 @@
         echo $html;
     }
 
-//function wp_gear_manager_admin_scripts() {
-//wp_enqueue_script('media-upload');
-//wp_enqueue_script('thickbox');
-//wp_enqueue_script('jquery');
-//}
-//function wp_gear_manager_admin_styles() {
-//wp_enqueue_style('thickbox');
-//}
-//add_action('admin_print_scripts', 'wp_gear_manager_admin_scripts');
-//add_action('admin_print_styles', 'wp_gear_manager_admin_styles');
+    // ///////////////////////////////////////////////////////////////////////////
+    // UI
+    // ///////////////////////////////////////////////////////////////////////////
 
     add_action('admin_print_scripts', 'wwrkds_enqueue');
     function wwrkds_enqueue(){
@@ -165,6 +206,7 @@
             </div>
         <?php
     }
+
     // Add fields to vendor edit form for admins to edit
     add_action( 'shop_vendor_edit_form_fields', 'wwrkds_custom_edit_vendor_fields');
     function wwrkds_custom_edit_vendor_fields( $vendor ) {
@@ -207,6 +249,7 @@
             </tr>
         <?php
     }
+
     // Add fields to vendor details form for vendors to edit
     add_action( 'product_vendors_details_fields', 'wwrkds_custom_vendor_details_fields');
     function wwrkds_custom_vendor_details_fields( $vendor_id ) {
@@ -290,39 +333,186 @@
     }
     add_filter('woocommerce_get_price_html','members_only_price');
 
-    //function woo_custom_cart_button_text() {
-    //    $product = new WC_Product( get_the_ID() );
-    //    $price = $product->price;
-    //    if ($price == 'Free!'){
-    //        $price = '';   
-    //        return __( 'Add To Cart', 'woocommerce' );
-    //    }else{
-    //        return __( 'Add To Cart', 'woocommerce' );
-    //    }
-    //} 
-    //add_filter( 'add_to_cart_text', 'woo_custom_cart_button_text' ); // < 2.1
+
+    // ///////////////////////////////////////////////////////////////////////////
+    // Data I/O
+    // ///////////////////////////////////////////////////////////////////////////
+
+    /**
+    * Loads the latest royalty information from CD Baby and creates new orders and
+    * commissions if necessary.  (Deltas must be > $1.00 to trigger new order creation)
+    */
+    function wwrkds_import_cdbaby_data( $atts=array(), $content = '' ){
+                  
+        try{
+            $user = get_user_by( 'login', 'cdbaby' );
+            $prev_totals = wwrkds_get_external_order_totals($user->ID);
+
+            $totals = wwrkds_get_cdbsdc_data($attr,$content);
+
+            asort($totals);
+            asort($prev_totals);
+
+            $ret = '';
+
+            $ret .= '<h2>Previous Totals:</h2><p>' . print_r($prev_totals, true) . '</p>';
+
+            $ret .= '<h2>Updated Totals:</h2><p>' . print_r($totals, true) . '</p>';
+
+            $deltas = array();
+            foreach($totals as $sku=>$total){
+
+                if (array_key_exists($sku,$prev_totals)){
+                    $delta = $total - $prev_totals[$sku];
+                }else{
+                    $delta = $total;
+                }
+                $deltas[$sku] = $delta;
+
+                if ($delta > 1.00){
+
+                    $result = wwrkds_create_external_order($sku,date("Y-m-d H:i:s"),$delta,$user);
+
+                    if($result){  
+                        $ret .= '<p>Created New Order: ' . $sku .", $" . $delta . '</p>';
+                    }
+                }
+            }
+            $ret .= '<h2>Deltas:</h2><p>' . print_r($deltas, true) . '</p>';
+            return $ret;
+        }catch(Exception $ex){
+            
+        }
+            
+    }
+
+    /**
+    * Parses the latest CDBaby sale data
+    */
+    function wwrkds_get_cdbsdc_data( $atts=array(), $content = '' ){
+        //$fname = "/Volumes/Data2/WillfulWreckords/BusinessDocs/Financial/CDBabyData/current/complete.csv";
+        //echo $fname;
+        
+        //$table = wwrkds_parse_csv_w_headers($fname);
+        //print_r($table);
+        
+        //$user = get_user_by( 'login', 'cdbaby' );
+        //$prev_totals = wwrkds_get_external_order_totals($user->ID);
+        //print_r($prev_totals);
+        
+        //TODO: Use WP Options and control panel confidurations to set album to upc mappings and file locations information
+        //TODO: Once completed turn this into a daily CRON task
+        
+        //Retrieve & extract shorcode parameters
+        extract( shortcode_atts( array(
+            "album_upc" => 'Before the Beginning:614346062723,Video Game Music:850722004059,Greatest Hits:850722004103,Punched:850722004066,Music for the Sonic Skitzoid:850722004080,Anthology:850722004097,International Breakfast:850722004004,Eight Legged Orchestra:850722004110',
+            "fname" => "/Volumes/Data2/WillfulWreckords/BusinessDocs/Financial/CDBabyData/current/complete.csv",
+            ), $atts ) );
+
+        $map = explode(",",$album_upc);
+                
+        $file = fopen($fname,"r");
+        $headers = fgetcsv($file);
+        
+        $totals=array();
+        while(! feof($file))
+        {
+            $row = array();
+            $data = fgetcsv($file);
+            for ($i=0;$i<count($data);$i++){
+                $row[trim($headers[$i])] = $data[$i]; 
+            }
+            
+            $payable = $row["PAYABLE"];
+            $qty = $row["QTY."];
+            $album = $row["ALBUM"];
+            $artist = $row["ARTIST"];
+            $saledate = $row["SALEDATE"];
+            $partner = $row["PARTNER"];
+            $sku = '';
+
+            foreach($map as $entry){
+                $map_entry = explode(":", $entry);
+                $album_name = $map_entry[0];
+                $upc = $map_entry[1];
+                
+                if (preg_match("/$album_name/i", trim($album))){
+                    $sku = $upc;
+                    break;
+                }
+            }
+            
+            $res = array("date"=>$saledate, "qty"=>$qty, "payable"=>$payable, "partner"=>$partner, "album"=>$album,"artist"=>$artist,"sku"=>$sku);
+            
+            if (! empty($sku)){
+                if (!array_key_exists($sku,$totals)){
+                    $totals[$sku] = str_replace("\$","",$payable);
+                }else{
+                    $totals[$sku] += str_replace("\$","",$payable);
+                }
+            }
+
+        }
+        fclose($file);  
+        
+        return $totals;
+    }
+
+
+    // ///////////////////////////////////////////////////////////////////////////
+    // Cron Tasks
+    // ///////////////////////////////////////////////////////////////////////////
+
+    /**
+     * Adding extra time periods for WP Cron
+     * @return [[Type]] [[Description]]
+     * https://www.jnorton.co.uk/blog/wordpress-tutorial-cron-jobs-scheduled-tasks#sthash.pocgdhZI.dpuf
+     */
+    function extra_reccurences() {
+        return array(
+            'weekly' => array('interval' => 604800, 'display' => 'Once Weekly'),
+            'fortnightly' => array('interval' => 1209600, 'display' => 'Once Fortnightly'),
+            'monthly' => array('interval' => 2592000, 'display' => 'Once Every 30 Days'),
+            'quarterly' => array('interval' => 7776000, 'display' => 'Once Every 90 Days'),
+        );
+    }
+    add_filter('cron_schedules', 'extra_reccurences'); 
+
+    /**
+     * Ading auto-parse and loading of CDBaby data into orders
+     * 
+     * @return [[Type]] [[Description]]
+     * https://www.jnorton.co.uk/blog/wordpress-tutorial-cron-jobs-scheduled-tasks#sthash.pocgdhZI.dpuf
+     */
+    if (!wp_next_scheduled('wwrkds_import_cdbaby_data_hook')) {
+        wp_schedule_event( time(), 'daily', 'wwrkds_import_cdbaby_data_hook' );
+    }
+    //while(wp_next_scheduled('wwrkds_import_cdbaby_data_hook')) {
+    //    wp_unschedule_event('wwrkds_import_cdbaby_data_hook' );
+    //}
+    //add_action("init", "remove_cron_job"); 
+    //function remove_cron_job() {
+    //    wp_clear_scheduled_hook("wwrkds_import_cdbaby_data_hook"); 
+    //}
+
+    add_action ( 'wwrkds_import_cdbaby_data_hook', 'wwrkds_import_cdbaby_data' );
 
     // ///////////////////////////////////////////////////////////////////////////
     // Shortcodes
     // ///////////////////////////////////////////////////////////////////////////
 
-    add_shortcode( 'wwrkds_parse_cdbsdc_data', 'wwrkds_parse_cdbsdc_data' );
-    function wwrkds_parse_cdbsdc_data(){
-        $fname = "/Volumes/Data2/WillfulWreckords/BusinessDocs/Financial/CDBabyData/current/AlbumTotals.csv";
-        $table = wwrkds_parse_csv_w_headers($fname);
-        print_r($table);
+    add_shortcode( 'wwrkds_import_cdbaby_data', 'wwrkds_import_cdbaby_data_ui' );
+    function wwrkds_import_cdbaby_data_ui($atts=array(),$content=''){
         
+        if (!current_user_can('administrator') && !is_admin()) {
+            return "<p>Sorry!  You must be logged in as an administrator to run the CD Baby data importer utility.</p>";
+        }
         
-        $user = get_user_by( 'login', 'cdbaby' );
-        $totals = wwrkds_get_external_order_totals($user->ID);
-        print_r($totals);
-        
-        //TODO: REGEX the table variable for product title -> SKU numbers, check for differences and create new orders accordingly
-        //TODO: Once completed turn this into a daily CRON task
-        
+        return wwrkds_import_cdbaby_data( $atts=array(), $content = '' );
     }
-
-    //Shortcode for programmatically adding external sales data...
+    
+    //Shortcode for programmatically adding external sales data through the UI
+    // [wwrkds_ordergen user=<user_login>]
     add_shortcode( 'wwrkds_ordergen', 'wwrkds_ordergen' );
     function wwrkds_ordergen( $atts ) {
         
